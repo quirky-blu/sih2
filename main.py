@@ -145,38 +145,79 @@ async def create_text_to_3d_task(request: Text3DRequest):
         logger.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
-    """Get task status and results"""
-    try:
+
+@app.get("/tasks/{task_id}/stream")
+async def stream_task_updates(task_id: str):
+    """Stream task status updates via Server-Sent Events"""
+    async def generate_task_updates():
         headers = await get_tripo3d_headers()
         url = f"{TRIPO3D_BASE_URL}/task/{task_id}"
+
+        # Send initial connection message
+        yield f"data: {json.dumps({'status': 'connected', 'task_id': task_id})}\n\n"
+
+        max_attempts = 180  # 6 minutes maximum (2 second intervals)
+        attempts = 0
+
+        while attempts < max_attempts:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(url, headers=headers)
+
+                    if response.status_code == 200:
+                        task_data = response.json()
+                        status = task_data.get("data", {}).get("status", "unknown") if "data" in task_data else task_data.get("status", "unknown")
+
+                        # Send update
+                        yield f"data: {json.dumps(task_data)}\n\n"
+
+                        # Check for completion status and send final result
+                        if status == "success":
+                            logger.info(f"Task {task_id} finished successfully. Extracting model URL.")
+                            # Extract the URL from the response
+                            model_url = task_data.get("data", {}).get("result", {}).get("model")
+                            
+                            if model_url:
+                                final_payload = {
+                                    "status": "completed",
+                                    "task_id": task_id,
+                                    "model_url": model_url,
+                                    "message": "3D model is ready."
+                                }
+                                yield f"data: {json.dumps(final_payload)}\n\n"
+                                logger.info(f"Sent final model URL for task {task_id}")
+                            break
+                        elif status in ["failed", "cancelled"]:
+                            logger.info(f"Task {task_id} finished with status: {status}")
+                            break
+
+                await asyncio.sleep(2)  # Poll every 2 seconds
+                attempts += 1
+            
+            except Exception as e:
+                logger.error(f"Error in streaming: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                await asyncio.sleep(5) # Wait longer on error
         
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers)
-            
-            if response.status_code == 404:
-                raise HTTPException(status_code=404, detail="Task not found")
-            elif response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Failed to get task status: {response.text}"
-                )
-            
-            task_data = response.json()
-            
-            # Update local task storage
-            if task_id in active_tasks:
-                status = task_data.get("data", {}).get("status", "unknown") if "data" in task_data else task_data.get("status", "unknown")
-                active_tasks[task_id]["status"] = status
-            
-            return task_data
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Final message if we exit the loop
+        if attempts >= max_attempts:
+            yield f"data: {json.dumps({'status': 'timeout', 'message': 'Streaming timeout reached'})}\n\n"
+        
+        yield f"data: {json.dumps({'status': 'stream_ended'})}\n\n"
+
+    return StreamingResponse(
+        generate_task_updates(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+
 
 @app.get("/tasks")
 async def list_tasks(limit: int = 10):
@@ -318,3 +359,4 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
+
