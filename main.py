@@ -145,6 +145,75 @@ async def create_text_to_3d_task(request: Text3DRequest):
         logger.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """Get task status and results"""
+    try:
+        headers = await get_tripo3d_headers()
+        url = f"{TRIPO3D_BASE_URL}/task/{task_id}"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Task not found")
+            elif response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to get task status: {response.text}"
+                )
+            
+            task_data = response.json()
+            
+            # Update local task storage
+            if task_id in active_tasks:
+                status = task_data.get("data", {}).get("status", "unknown") if "data" in task_data else task_data.get("status", "unknown")
+                active_tasks[task_id]["status"] = status
+            
+            return task_data
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/tasks")
+async def list_tasks(limit: int = 10):
+    """List recent tasks from local storage"""
+    try:
+        # Return tasks from local storage
+        tasks_list = []
+        for task_id, task_info in list(active_tasks.items())[-limit:]:
+            tasks_list.append({
+                "task_id": task_id,
+                "prompt": task_info.get("prompt", ""),
+                "status": task_info.get("status", "unknown"),
+                "created_at": task_info.get("created_at")
+            })
+        
+        return {"tasks": tasks_list}
+        
+    except Exception as e:
+        logger.error(f"Error listing tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """Delete a task from local storage"""
+    try:
+        if task_id in active_tasks:
+            del active_tasks[task_id]
+            return {"message": f"Task {task_id} deleted from local storage"}
+        else:
+            raise HTTPException(status_code=404, detail="Task not found in local storage")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/tasks/{task_id}/stream")
 async def stream_task_updates(task_id: str):
@@ -218,112 +287,6 @@ async def stream_task_updates(task_id: str):
     )
 
 
-
-@app.get("/tasks")
-async def list_tasks(limit: int = 10):
-    """List recent tasks from local storage"""
-    try:
-        # Return tasks from local storage
-        tasks_list = []
-        for task_id, task_info in list(active_tasks.items())[-limit:]:
-            tasks_list.append({
-                "task_id": task_id,
-                "prompt": task_info.get("prompt", ""),
-                "status": task_info.get("status", "unknown"),
-                "created_at": task_info.get("created_at")
-            })
-        
-        return {"tasks": tasks_list}
-        
-    except Exception as e:
-        logger.error(f"Error listing tasks: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/tasks/{task_id}")
-async def delete_task(task_id: str):
-    """Delete a task from local storage"""
-    try:
-        if task_id in active_tasks:
-            del active_tasks[task_id]
-            return {"message": f"Task {task_id} deleted from local storage"}
-        else:
-            raise HTTPException(status_code=404, detail="Task not found in local storage")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/tasks/{task_id}/stream")
-async def stream_task_updates(task_id: str):
-    """Stream task status updates via Server-Sent Events"""
-    async def generate_task_updates():
-        headers = await get_tripo3d_headers()
-        url = f"{TRIPO3D_BASE_URL}/task/{task_id}"
-        
-        # Send initial connection message
-        yield f"data: {json.dumps({'status': 'connected', 'task_id': task_id})}\n\n"
-        
-        max_attempts = 180  # 6 minutes maximum (2 second intervals)
-        attempts = 0
-        
-        while attempts < max_attempts:
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.get(url, headers=headers)
-                    
-                    if response.status_code == 200:
-                        task_data = response.json()
-                        
-                        # Handle nested status in data field
-                        status = task_data.get("data", {}).get("status", "unknown") if "data" in task_data else task_data.get("status", "unknown")
-                        
-                        # Update local storage
-                        if task_id in active_tasks:
-                            active_tasks[task_id]["status"] = status
-                        
-                        # Send update
-                        yield f"data: {json.dumps(task_data)}\n\n"
-                        
-                        # Stop streaming if task is completed or failed
-                        if status in ["success", "failed", "cancelled"]:
-                            logger.info(f"Task {task_id} finished with status: {status}")
-                            break
-                            
-                    elif response.status_code == 404:
-                        yield f"data: {json.dumps({'error': 'Task not found'})}\n\n"
-                        break
-                    else:
-                        yield f"data: {json.dumps({'error': f'API error: {response.status_code}'})}\n\n"
-                        
-                await asyncio.sleep(2)  # Poll every 2 seconds
-                attempts += 1
-                
-            except Exception as e:
-                logger.error(f"Error in streaming: {e}")
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                await asyncio.sleep(5)  # Wait longer on error
-                attempts += 1
-        
-        # Final message if we exit the loop
-        if attempts >= max_attempts:
-            yield f"data: {json.dumps({'status': 'timeout', 'message': 'Streaming timeout reached'})}\n\n"
-        
-        yield f"data: {json.dumps({'status': 'stream_ended'})}\n\n"
-    
-    return StreamingResponse(
-        generate_task_updates(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*"
-        }
-    )
-
 @app.get("/models")
 async def get_available_models():
     """Get available model versions"""
@@ -358,5 +321,4 @@ if __name__ == "__main__":
         port=8000, 
         reload=True,
         log_level="info"
-    )
-
+                )
