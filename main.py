@@ -243,18 +243,25 @@ async def stream_task_updates(task_id: str):
                         # Check for completion status and send final result
                         if status == "success":
                             logger.info(f"Task {task_id} finished successfully. Extracting model URL.")
-                            # Extract the URL from the response
-                            model_url = task_data.get("data", {}).get("result", {}).get("model")
+                            # Extract the URL from the response - correct path is data.result.pbr_model.url
+                            result_data = task_data.get("data", {}).get("result", {})
+                            model_url = result_data.get("pbr_model", {}).get("url")
+                            
+                            # Also extract additional URLs that might be useful
+                            rendered_image_url = result_data.get("rendered_image", {}).get("url")
+                            pbr_model_type = result_data.get("pbr_model", {}).get("type")
                             
                             if model_url:
                                 final_payload = {
                                     "status": "completed",
                                     "task_id": task_id,
                                     "model_url": model_url,
+                                    "model_type": pbr_model_type,
+                                    "rendered_image_url": rendered_image_url,
                                     "message": "3D model is ready."
                                 }
                                 yield f"data: {json.dumps(final_payload)}\n\n"
-                                logger.info(f"Sent final model URL for task {task_id}")
+                                logger.info(f"Sent final model URL for task {task_id}: {model_url}")
                             else:
                                 # Log the structure to help debug
                                 logger.warning(f"No model URL found in successful response: {task_data}")
