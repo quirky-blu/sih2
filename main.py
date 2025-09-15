@@ -16,7 +16,7 @@ load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # Fixed: was _name_
 
 app = FastAPI(
     title="Tripo3D API Backend",
@@ -255,6 +255,10 @@ async def stream_task_updates(task_id: str):
                                 }
                                 yield f"data: {json.dumps(final_payload)}\n\n"
                                 logger.info(f"Sent final model URL for task {task_id}")
+                            else:
+                                # Log the structure to help debug
+                                logger.warning(f"No model URL found in successful response: {task_data}")
+                                yield f"data: {json.dumps({'status': 'completed_no_url', 'task_id': task_id, 'message': 'Task completed but no model URL found', 'full_response': task_data})}\n\n"
                             break
                         elif status in ["failed", "cancelled"]:
                             logger.info(f"Task {task_id} finished with status: {status}")
@@ -266,7 +270,7 @@ async def stream_task_updates(task_id: str):
             except Exception as e:
                 logger.error(f"Error in streaming: {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                await asyncio.sleep(5) # Wait longer on error
+                await asyncio.sleep(5)  # Wait longer on error
         
         # Final message if we exit the loop
         if attempts >= max_attempts:
@@ -313,7 +317,7 @@ async def get_available_models():
         ]
     }
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # Fixed: was "_main_"
     import uvicorn
     uvicorn.run(
         "main:app", 
@@ -321,4 +325,4 @@ if __name__ == "__main__":
         port=8000, 
         reload=True,
         log_level="info"
-                )
+    )
