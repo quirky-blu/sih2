@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import logging
 import time
 from dotenv import load_dotenv
+from google import genai
 
 # Load environment variables from .env file
 load_dotenv()
@@ -323,6 +324,29 @@ async def get_available_models():
             }
         ]
     }
+llm_key = os.getenv("LLM_KEY")
+client = genai.Client(api_key=llm_key)
+class GeminiPrompt(BaseModel):
+    prompt: str
+
+@app.post("/gemini/generate")
+async def generate_from_gemini(data: GeminiPrompt):
+    try:
+        # Prepend the default marine expert intro
+        full_prompt = """You are a marine expert. you must tell about the species morphometrics in 50 words. you must tell in this format
+        length : x cm
+        weight : x kg
+        type of diet: 
+        generally found in this area : 
+        colors:
+        now do this for """ + data.prompt.strip()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+        )
+        return {"response": response.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":  # Fixed: was "_main_"
     import uvicorn
@@ -333,3 +357,4 @@ if __name__ == "__main__":  # Fixed: was "_main_"
         reload=True,
         log_level="info"
     )
+
