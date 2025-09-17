@@ -333,6 +333,18 @@ class GeminiPrompt(BaseModel):
 async def generate_from_gemini(data: GeminiPrompt):
     try:
         # Prepend the default marine expert intro
+        full_prompt = """answer this question in 50 or less words """ + data.prompt.strip()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+        )
+        return {"response": response.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.post("/gemini/generate-morphometrics")
+async def generate_from_gemini(data: GeminiPrompt):
+    try:
+        # Prepend the default marine expert intro
         full_prompt = """You are a marine expert. you must tell about the species morphometrics in 50 words. you must tell in this format
         length : x cm
         weight : x kg
@@ -347,7 +359,20 @@ async def generate_from_gemini(data: GeminiPrompt):
         return {"response": response.text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+@app.post("/gemini/generate-3D")
+async def generate_from_gemini(data: GeminiPrompt):
+    try:
+        # Prepend the default marine expert intro
+        full_prompt = """anser in 70-80 words.
+You are an expert 3D model design assistant.  
+Your task is to generate a **detailed textual description**, you must mention major features, colors and textures for a 3D model of a""" + data.prompt.strip()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+        )
+        return {"response": response.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 if __name__ == "__main__":  # Fixed: was "_main_"
     import uvicorn
     uvicorn.run(
@@ -357,4 +382,5 @@ if __name__ == "__main__":  # Fixed: was "_main_"
         reload=True,
         log_level="info"
     )
+
 
